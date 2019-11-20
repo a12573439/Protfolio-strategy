@@ -1,0 +1,120 @@
+from quantopian.algorithm import attach_pipeline,pipeline_output
+from quantopian.pipeline import Pipeline
+from quantopian.pipeline.data.builtin import USEquityPricing
+from quantopian.pipeline.factors import AverageDollarVolume,SimpleMovingAverage
+from quantopian.pipeline.filters.morningstar import Q500US
+from quantopian.pipeline.data import morningstar
+import numpy as np
+import pandas as pd
+
+
+def initialize(context):
+    
+    schedule_function(my_rebalance,
+    date_rules.month_start(),
+    time_rules.market_open(hours=1))
+        
+    my_pipe = make_pipeline()
+    attach_pipeline(my_pipe,'my_pipeline')
+    
+def my_rebalance(context,data):
+    for security in context.portfolio.positions:
+        if security not in context.longs and security and data.can_trade(security):
+            order_target_percent(security,0)
+           
+    for security in context.longs:
+        if data.can_trade(security):
+            order_target_percent(security,0.1)
+            print(security)
+    buy = 0   
+    L = 6
+    for idx in range(0,10):
+        if data.can_trade(context.longs[idx]):
+            price_history = data.history(context.longs[idx], fields="close", bar_count=L+1, frequency="1d")
+            pct_change = price_history.shift(1)/price_history - 1
+            target = 0
+          
+            for i in range(1,L):
+                if pct_change[i]>0:
+                    target = target + np.power(2,L-i)
+            if context.record[idx][target+1]>=context.record[idx][target]: 
+                buy = buy +1
+                
+    print(buy)
+                
+    for idx in range(0,10):
+        if data.can_trade(context.longs[idx]):
+            price_history = data.history(context.longs[idx], fields="close", bar_count=L+1, frequency="1d")
+            pct_change = price_history.shift(1)/price_history - 1
+            target = 0
+          
+            for i in range(1,L):
+                if pct_change[i]>0:
+                    target = target + np.power(2,L-i)
+            if context.record[idx][target+1]>=context.record[idx][target]: 
+                if buy != 0:
+                    print('buy')
+                    order_target_percent(context.longs[idx],1/buy)
+                    print(1/buy,'buy',context.longs[idx])
+                if buy == 0 :
+                    order_target_percent(context.longs[idx],0)
+                    print('0',context.longs[idx])
+                    
+            else:
+                order_target_percent(context.longs[idx],0)
+                print('0',context.longs[idx]) 
+        
+
+def before_trading_start(context,data):
+    context.output = pipeline_output('my_pipeline')
+    context.longs = context.output.sort_values('PE Ratio', ascending=False).head(10).index.tolist()
+    L=6
+    context.record = np.zeros((10,np.power(2,L)))
+    for i in range(0,10):
+        secu_close = data.history(context.longs[i], fields="close", bar_count=1000, frequency="1d")
+        secu_pct_change = secu_close.shift(1)/secu_close - 1
+        for j in range(L,len(secu_close)):
+            position = 0
+            for idx in range(0,L):
+                if secu_pct_change[j-idx]>0:
+                    position = position + np.power(2,idx)
+            context.record[i][position] = context.record[i][position] + 1
+
+
+def make_pipeline():
+    
+    # Universe Q500US
+    base_universe = Q500US()
+    
+    # Get PE ratios 
+    pe_ratio = morningstar.valuation_ratios.pe_ratio.latest
+    
+    # roe figure
+    roe = morningstar.operation_ratios.roe.latest
+    
+    # netprofitmargin figure
+    netmargin = morningstar.operation_ratios.net_margin.latest
+    
+    # prices
+    prices = USEquityPricing.close.latest
+    
+    # filters
+    # pe criteria
+    
+    roe_fil = roe > 0.08
+    
+    
+    netmargin_fil = netmargin > 0.08
+    
+    total_fil = roe_fil & netmargin_fil
+   
+    final_fil = total_fil & base_universe
+    
+    #Return pipe:
+    return Pipeline(
+        columns = {
+            "Price": prices,
+            "ROE": roe,
+            "Net Margin": netmargin,
+            "PE Ratio": pe_ratio
+            }, screen = final_fil)
